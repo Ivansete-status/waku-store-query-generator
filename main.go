@@ -10,23 +10,21 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	"sync"
 
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	log "github.com/sirupsen/logrus"
-	logrus "github.com/sirupsen/logrus"
 	"github.com/waku-org/go-waku/waku/v2/node"
-	"github.com/waku-org/go-waku/waku/v2/payload"
-	"github.com/waku-org/go-waku/waku/v2/protocol/pb"
-	"github.com/waku-org/go-waku/waku/v2/protocol/relay"
-	"github.com/waku-org/go-waku/waku/v2/utils"
+	"github.com/waku-org/go-waku/waku/v2/protocol/store"
 	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap"
 )
 
-var msgSent = 0
-
-//var log = utils.Logger().Named("basic2")
+var storeReqSent = 0
 
 func newConnManager(lo int, hi int, opts ...connmgr.Option) *connmgr.BasicConnMgr {
 	mgr, err := connmgr.NewConnManager(lo, hi, opts...)
@@ -63,20 +61,7 @@ func main() {
 
 	customNodes := []*enode.Node{
 		enode.MustParse(cfg.BootstrapNode),
-		//enode.MustParse("enr:-M-4QOth4Dg45mYtbfMf3YZOLaAVrQuNWEyb-rahElFJHeBkCTXe0AMPXO_XtT05UK3_v6nEfQOLWaVGt6WUsM_BpA0BgmlkgnY0gmlwhI_G-a6KbXVsdGlhZGRyc7EALzYobm9kZS0wMS5kby1hbXMzLnN0YXR1cy5wcm9kLnN0YXR1c2ltLm5ldAYBu94DiXNlY3AyNTZrMaECoVyonsTGEQvVioM562Q1fjzTb_vKD152PPIdsV7sM6SDdGNwgnZfg3VkcIIjKIV3YWt1Mg8"),
-		//enode.MustParse("enr:-M-4QHL_casP1Jy4KntHNWT3p1XkPxm1BJSxDi7KucSqZ2PgT97d4xEQ4cJx-bgw0SRu-nO4y5k0jTQN4AH7utodtZMBgmlkgnY0gmlwhKEj9HmKbXVsdGlhZGRyc7EALzYobm9kZS0wMi5kby1hbXMzLnN0YXR1cy5wcm9kLnN0YXR1c2ltLm5ldAYBu94DiXNlY3AyNTZrMaED1AYI2Ox27DnSqf2qoih5M2fNpHFq-OzJ3thREEApdiiDdGNwgnZfg3VkcIIjKIV3YWt1Mg8"),
 	}
-
-	/*
-		log.Info("DefaultLibP2POptions len: ", len(node.DefaultLibP2POptions))
-		if len(node.DefaultLibP2POptions) != 5 {
-			log.Fatal("DefaultLibP2POptions has changed, please update this code")
-		}
-		// Very dirty way to inject a new ConnManager
-		// TODO: This should keep the max amount of peers to 5 but the manager has a hard time doing so
-		// it stays around 6 or so. Need to investigate
-		node.DefaultLibP2POptions[4] = libp2p.ConnectionManager(newConnManager(1, cfg.MaxPeers, connmgr.WithGracePeriod(0)))
-	*/
 
 	wakuNode, err := node.New(
 		node.WithPrivateKey(prvKey),
@@ -102,8 +87,22 @@ func main() {
 		log.Fatal("Error starting discovery: ", err)
 	}
 
+	// Connecting to nodes
+	// ================================================================
+
+	log.Info("Connecting to nodes...")
+
+	peers := []string{
+		cfg.PeerStoreSQLiteAddr,
+		cfg.PeerStorePostgresAddr,
+	}
+
+	connectToNodes(ctx, wakuNode, peers)
+
+	time.Sleep(2 * time.Second) // Required so Identify protocol is executed
+
 	go logPeriodicInfo(wakuNode)
-	go runEvery(wakuNode, cfg)
+	go runEvery(wakuNode, peers, int(cfg.QueriesPerSecond))
 
 	// Wait for a SIGINT or SIGTERM signal
 	ch := make(chan os.Signal, 1)
@@ -117,7 +116,7 @@ func main() {
 
 func logPeriodicInfo(wakuNode *node.WakuNode) {
 	for {
-		fmt.Println("Connected peers", wakuNode.PeerCount(), " msg sent: ", msgSent)
+		fmt.Println("Connected peers", wakuNode.PeerCount(), " msg sent: ", storeReqSent)
 		time.Sleep(10 * time.Second)
 	}
 }
@@ -130,7 +129,7 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-func runEvery(wakuNode *node.WakuNode, cfg *Config) {
+func runEvery(wakuNode *node.WakuNode, peers []string, queriesPerSec int) {
 	tickInSeconds := int64(1)
 	ticker := time.NewTicker(time.Duration(tickInSeconds) * time.Second)
 	quit := make(chan struct{})
@@ -139,18 +138,18 @@ func runEvery(wakuNode *node.WakuNode, cfg *Config) {
 		case <-ticker.C:
 			start := time.Now().UnixNano() / int64(time.Millisecond)
 
-			// Not very fancy. messages are not evenly distributed over time
+			// Not very fancy. requests are not evenly distributed over time
 			// eg 5 msg per second are send very quickly and the remaning time to complete
 			// the second is idle.
-			for i := 0; i < int(cfg.MsgPerSecond); i++ {
-				write(context.Background(), wakuNode, cfg)
-				msgSent++
+			for i := 0; i < queriesPerSec; i++ {
+				performStoreQueries(wakuNode, peers)
+				storeReqSent++
 			}
 			end := time.Now().UnixNano() / int64(time.Millisecond)
 
 			diff := end - start
 			fmt.Println("Duration(ms):", diff)
-			// do something if message rate is greater than what can be handled
+			// do something if request rate is greater than what can be handled
 			if diff > tickInSeconds*1000 {
 				fmt.Println("Warning: took more than 1 second")
 			}
@@ -161,84 +160,122 @@ func runEvery(wakuNode *node.WakuNode, cfg *Config) {
 	}
 }
 
-func PublishRawToTopic(ctx context.Context, w *relay.WakuRelay, rawData []byte, topic string) {
-	// Publish a `WakuMessage` to a PubSub topic.
-	err := w.PubSub().Publish(topic, rawData)
-	if err != nil {
-		logrus.Error("Error publishing message: ", err)
+func connectToNodes(ctx context.Context,
+					node *node.WakuNode,
+					nodeList []string) {
+	wg := sync.WaitGroup{}
+	for _, addr := range nodeList {
+		wg.Add(1)
+		go func(addr string) {
+			wg.Done()
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			err := node.DialPeer(ctx, addr)
+			if err != nil {
+				log.Error("could not connect to peer", zap.String("addr", addr), zap.Error(err))
+			}
+		}(addr)
 	}
+	wg.Wait()
 }
 
-func write(
-	ctx context.Context,
-	wakuNode *node.WakuNode,
-	cfg *Config) {
+func queryNode(ctx context.Context,
+			   node *node.WakuNode,
+			   addr string,
+			   pubsubTopic string,
+			   contentTopic string,
+			   startTime time.Time,
+			   endTime time.Time) (int, error) {
 
-	var version uint32 = 0
-	var timestamp int64 = utils.GetUnixEpoch(wakuNode.Timesource())
-
-	randomPayload := make([]byte, cfg.MsgSizeKb*1000)
-	rand.Read(randomPayload)
-
-	p := new(payload.Payload)
-	//p.Data = []byte(wakuNode.ID() + ": " + msgContent)
-	p.Data = []byte(randomPayload)
-	//p.Key = &payload.KeyInfo{Kind: payload.None}
-
-	//fmt.Println("Payload size: ", len(p.Data), " bytes")
-
-	payload, err := p.Encode(version)
+	p, err := multiaddr.NewMultiaddr(addr)
 	if err != nil {
-		log.Fatal("Error encoding the payload: ", err)
-		return
+		return -1, err
 	}
 
-	//log.Info("Message payload in kBytes: ", len(p.Data)/1000)
-
-	msg := &pb.WakuMessage{
-		Payload:      payload,
-		Version:      version,
-		ContentTopic: cfg.ContentTopic,
-		Timestamp:    timestamp,
+	info, err := peer.AddrInfoFromP2pAddr(p)
+	if err != nil {
+		return -1, err
 	}
 
-	/*
-		msgMarshal, err := msg.Marshal()
+	cnt := 0
+	cursorIterations := 0
+
+	result, err := node.Store().Query(ctx,
+									  store.Query{
+											Topic:         pubsubTopic,
+											ContentTopics: []string{contentTopic},
+											StartTime:     startTime.UnixNano(),
+											EndTime:       endTime.UnixNano(),
+										},
+										store.WithPeer(info.ID), store.WithPaging(false, 100),
+										store.WithRequestId([]byte{1, 2, 3, 4, 5, 6, 7, 8}),
+									)
+	if err != nil {
+		return -1, err
+	}
+
+	for {
+		hasNext, err := result.Next(ctx)
 		if err != nil {
-			log.Error("Error marshalling message: ", err)
-		}
-		fmt.Println("msg size: ", len(msgMarshal), " bytes")*/
-
-	//_, err = wakuNode.Relay().Publish(ctx, msg)
-	//wakuNode.Relay().PublishToTopic(ctx, msg, relay.DefaultWakuTopic)
-
-	if cfg.PublishInvalid {
-		// Publish invalid messages to the topic, just random bytes
-		PublishRawToTopic(ctx, wakuNode.Relay(), msg.Payload, cfg.PubSubTopic)
-	} else {
-		// Sign only if a key was configured
-		if cfg.PrivateKey != nil {
-			err = relay.SignMessage(cfg.PrivateKey, msg, cfg.PubSubTopic)
-			if err != nil {
-				log.Fatal("Error signing message: ", err)
-			}
-		}
-		// only log valid messages
-		// log here the time is not really far, as it take time to publish. not usre if
-		// after or before.
-		if cfg.LogSentMessages {
-			log.WithFields(log.Fields{
-				"peerId":      wakuNode.ID(),
-				"pubsubTopic": cfg.PubSubTopic,
-				"hash":        "0x" + hex.EncodeToString(msg.Hash(cfg.PubSubTopic)),
-				"sentTime":    time.Now().UnixNano(),
-				//"payloadSizeBytes": len(msg.Payload),
-			}).Info("Published message")
+			return -1, err
 		}
 
-		_, err = wakuNode.Relay().PublishToTopic(ctx, msg, cfg.PubSubTopic)
-		if err != nil {
-			log.Error("Error sending a message: ", err)
+		if !hasNext { // No more messages available
+			break
+		}
+		cursorIterations += 1
+
+		cnt += len(result.GetMessages())
+	}
+
+	log.Info(fmt.Sprintf("%d messages found in %s (Used cursor %d times)\n",
+			 cnt, info.ID, cursorIterations))
+
+	return cnt, nil
+}
+
+// This func performs a query to both the SQLite and Postgres Store peers.
+// Notice that these peers should be passed as a parameter to the app.
+func performStoreQueries(
+	wakuNode *node.WakuNode,
+	peers []string) {
+
+	pubsubTopic := "/waku/2/default-waku/proto"
+	endTime := wakuNode.Timesource().Now()
+	startTime := endTime.Add(-time.Minute * 5)
+	contentTopic := "my-ctopic"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second) // Test shouldnt take more than 60s
+	defer cancel()
+
+	// Store
+	// ================================================================
+
+	timeSpentMap := make(map[string]time.Duration)
+	numUsers := int64(10)
+
+	wg := sync.WaitGroup{}
+	for _, addr := range peers {
+		for userIndex := 0; userIndex < int(numUsers); userIndex++ {
+			wg.Add(1)
+			go func(addr string) {
+				defer wg.Done()
+				fmt.Println("Querying node", addr)
+				start := time.Now()
+				cnt, _ := queryNode(ctx, wakuNode, addr, pubsubTopic, contentTopic, startTime, endTime)
+				timeSpent := time.Since(start)
+				fmt.Printf("\n%s took %v. Obtained: %d rows", addr, timeSpent, cnt)
+				timeSpentMap[addr] += timeSpent
+			}(addr)
 		}
 	}
+
+	wg.Wait()
+
+	timeSpentNanos := timeSpentMap[peers[0]].Nanoseconds() / numUsers
+	fmt.Println("\n\nAverage time spent: ", peers[0], time.Duration(timeSpentNanos))
+
+	timeSpentNanos = timeSpentMap[peers[1]].Nanoseconds() / numUsers
+	fmt.Println("\n\nAverage time spent:", peers[1], time.Duration(timeSpentNanos))
+	fmt.Println("")
 }

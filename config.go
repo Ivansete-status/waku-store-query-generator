@@ -1,26 +1,22 @@
 package main
 
 import (
-	"crypto/ecdsa"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"os"
 
-	"github.com/ethereum/go-ethereum/crypto"
 	logrus "github.com/sirupsen/logrus"
 )
 
 type Config struct {
 	PubSubTopic     string
 	ContentTopic    string
-	MsgPerSecond    uint64
-	MsgSizeKb       uint64
+	QueriesPerSecond    uint64
 	BootstrapNode   string
 	PublishInvalid  bool
-	MaxPeers        int
-	PrivateKey      *ecdsa.PrivateKey
 	LogSentMessages bool
+	PeerStoreSQLiteAddr string
+	PeerStorePostgresAddr string
 }
 
 // By default the release is a custom build. CI takes care of upgrading it with
@@ -29,15 +25,13 @@ var ReleaseVersion = "custom-build"
 
 func NewCliConfig() (*Config, error) {
 	var version = flag.String("version", "", "Prints the release version and exits")
-	var pubSubTopic = flag.String("pubsub-topic", "", "PubSub topic to publish messages to")
-	var contentTopic = flag.String("content-topic", "", "Content topic to publish messages to")
-	var msgPerSecond = flag.Uint64("msg-per-second", 0, "Number of messages to publish per second")
-	var msgSizeKb = flag.Uint64("msg-size-kb", 0, "Size of messages to publish in kilobytes")
+	var pubSubTopic = flag.String("pubsub-topic", "", "PubSub topic to make Store requests to")
+	var contentTopic = flag.String("content-topic", "", "Content topic to make Store requests to")
+	var queriesPerSecond = flag.Uint64("queries-per-second", 0, "Number of queries to be made per second")
 	var bootstrapNode = flag.String("bootstrap-node", "", "Bootstrap node to connect to")
-	var privateKey = flag.String("private-key", "", "Key used to sign messages in configured pubsub topic")
-	var publishInvalid = flag.Bool("publish-invalid", false, "Publish invalid messages to the configured pubsub topic (true/false). default: false")
-	var maxPeers = flag.Int("max-peers", 5, "Maximum number of peers to connect to. default: 5")
 	var logSentMessages = flag.Bool("log-sent-messages", false, "Logs the messages that are sent. default: false")
+	var peerStoreSQLiteAddr = flag.String("peer-store-sqlite-addr", "", "Multiaddress of peer with Store mounted and using SQLite as archiver")
+	var peerStorePostgresAddr = flag.String("peer-store-postgres-addr", "", "Multiaddress of peer with Store mounted and using Postgres as archiver")
 
 	flag.Parse()
 
@@ -48,55 +42,37 @@ func NewCliConfig() (*Config, error) {
 
 	// Some simple validation
 	if *pubSubTopic == "" {
-		return nil, errors.New("PubSub topic is required")
+		return nil, errors.New("--pubsub-topic is required")
 	}
 
 	if *contentTopic == "" {
-		return nil, errors.New("Content topic is required")
+		return nil, errors.New("--content-topic is required")
 	}
 
-	if *msgPerSecond == 0 {
-		return nil, errors.New("Number of messages per second is required")
-	}
-
-	if *msgSizeKb == 0 {
-		return nil, errors.New("Message size in kilobytes is required")
+	if *queriesPerSecond == 0 {
+		return nil, errors.New("--queries-per-second is required")
 	}
 
 	if *bootstrapNode == "" {
-		return nil, errors.New("Bootstrap node is required")
+		return nil, errors.New("--bootstrap-node is required")
 	}
 
-	var pKey *ecdsa.PrivateKey
-	var err error
-	pKey = nil
+	if *peerStoreSQLiteAddr == "" {
+		return nil, errors.New("--peer-store-sqlite-addr is required")
+	}
 
-	if *privateKey != "" {
-		pKey, err = crypto.HexToECDSA(*privateKey)
-		if err != nil {
-			return nil, errors.New("wrong private key, couldn't parse it: " + err.Error())
-		}
-		publicKeyECDSA, ok := pKey.Public().(*ecdsa.PublicKey)
-		if !ok {
-			return nil, errors.New("error casting public key to ECDSA: " + err.Error())
-		}
-		//address = crypto.PubkeyToAddress(*publicKeyECDSA).Hex()
-		pubKBytes := crypto.FromECDSAPub(publicKeyECDSA)
-		logrus.Info("Configured public key: ", hex.EncodeToString(pubKBytes))
-	} else {
-		logrus.Info("No key was configured to sign messages with")
+	if *peerStorePostgresAddr == "" {
+		return nil, errors.New("--peer-store-postgres-addr is required")
 	}
 
 	conf := &Config{
 		PubSubTopic:     *pubSubTopic,
 		ContentTopic:    *contentTopic,
-		MsgPerSecond:    *msgPerSecond,
-		MsgSizeKb:       *msgSizeKb,
+		QueriesPerSecond:    *queriesPerSecond,
 		BootstrapNode:   *bootstrapNode,
-		PublishInvalid:  *publishInvalid,
-		MaxPeers:        *maxPeers,
-		PrivateKey:      pKey,
 		LogSentMessages: *logSentMessages,
+		PeerStoreSQLiteAddr: *peerStoreSQLiteAddr,
+		PeerStorePostgresAddr: *peerStorePostgresAddr,
 	}
 	logConfig(conf)
 	return conf, nil
@@ -106,11 +82,10 @@ func logConfig(cfg *Config) {
 	logrus.WithFields(logrus.Fields{
 		"PubSubTopic":     cfg.PubSubTopic,
 		"ContentTopic":    cfg.ContentTopic,
-		"MsgPerSecond":    cfg.MsgPerSecond,
-		"MsgSizeKb":       cfg.MsgSizeKb,
-		"PublishInvalid":  cfg.PublishInvalid,
-		"MaxPeers":        cfg.MaxPeers,
+		"QueriesPerSecond":    cfg.QueriesPerSecond,
 		"BootstrapNode":   cfg.BootstrapNode,
 		"LogSentMessages": cfg.LogSentMessages,
+		"PeerStoreSQLiteAddr": cfg.PeerStoreSQLiteAddr,
+		"PeerStorePostgresAddr": cfg.PeerStorePostgresAddr,
 	}).Info("Cli Config:")
 }
