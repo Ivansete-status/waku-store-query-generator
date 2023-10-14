@@ -12,6 +12,7 @@ type Config struct {
 	PubSubTopic     string
 	ContentTopic    string
 	QueriesPerSecond    uint64
+	NumMinutesQuery    uint64 // we perform a query to get msgs from now until -NumMinutesQuery back
 	BootstrapNode   string
 	PublishInvalid  bool
 	LogSentMessages bool
@@ -32,6 +33,7 @@ func NewCliConfig() (*Config, error) {
 	var logSentMessages = flag.Bool("log-sent-messages", false, "Logs the messages that are sent. default: false")
 	var peerStoreSQLiteAddr = flag.String("peer-store-sqlite-addr", "", "Multiaddress of peer with Store mounted and using SQLite as archiver")
 	var peerStorePostgresAddr = flag.String("peer-store-postgres-addr", "", "Multiaddress of peer with Store mounted and using Postgres as archiver")
+	var numMinutes = flag.Uint64("num-minutes-query", 5, "Defines the message range (storedAt) in the Store query")
 
 	flag.Parse()
 
@@ -69,6 +71,7 @@ func NewCliConfig() (*Config, error) {
 		PubSubTopic:     *pubSubTopic,
 		ContentTopic:    *contentTopic,
 		QueriesPerSecond:    *queriesPerSecond,
+		NumMinutesQuery: *numMinutes,
 		BootstrapNode:   *bootstrapNode,
 		LogSentMessages: *logSentMessages,
 		PeerStoreSQLiteAddr: *peerStoreSQLiteAddr,
@@ -83,6 +86,7 @@ func logConfig(cfg *Config) {
 		"PubSubTopic":     cfg.PubSubTopic,
 		"ContentTopic":    cfg.ContentTopic,
 		"QueriesPerSecond":    cfg.QueriesPerSecond,
+		"NumMinutesQuery": cfg.NumMinutesQuery,
 		"BootstrapNode":   cfg.BootstrapNode,
 		"LogSentMessages": cfg.LogSentMessages,
 		"PeerStoreSQLiteAddr": cfg.PeerStoreSQLiteAddr,
