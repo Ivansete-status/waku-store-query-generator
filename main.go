@@ -12,6 +12,7 @@ import (
 	"time"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -200,6 +201,8 @@ func queryNode(ctx context.Context,
 	cnt := 0
 	cursorIterations := 0
 
+	requestId := uuid.New()
+
 	result, err := node.Store().Query(ctx,
 									  store.Query{
 											Topic:         pubsubTopic,
@@ -208,7 +211,7 @@ func queryNode(ctx context.Context,
 											EndTime:       endTime.UnixNano(),
 										},
 										store.WithPeer(info.ID), store.WithPaging(false, 100),
-										store.WithRequestId([]byte{1, 2, 3, 4, 5, 6, 7, 8}),
+										store.WithRequestId([]byte(requestId.String())),
 									)
 	if err != nil {
 		return -1, err
