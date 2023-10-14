@@ -260,6 +260,8 @@ func performStoreQueries(
 	// ================================================================
 
 	timeSpentMap := make(map[string]time.Duration)
+	mapMutex := sync.RWMutex{}
+
 	numUsers := int64(10)
 
 	wg := sync.WaitGroup{}
@@ -273,17 +275,23 @@ func performStoreQueries(
 				cnt, _ := queryNode(ctx, wakuNode, addr, pubsubTopic, contentTopic, startTime, endTime)
 				timeSpent := time.Since(start)
 				fmt.Printf("\n%s took %v. Obtained: %d rows", addr, timeSpent, cnt)
+				mapMutex.Lock()
 				timeSpentMap[addr] += timeSpent
+				mapMutex.Unlock()
 			}(addr)
 		}
 	}
 
 	wg.Wait()
 
+	mapMutex.RLock()
 	timeSpentNanos := timeSpentMap[peers[0]].Nanoseconds() / numUsers
+	mapMutex.RUnlock()
 	fmt.Println("\n\nAverage time spent: ", peers[0], time.Duration(timeSpentNanos))
 
+	mapMutex.RLock()
 	timeSpentNanos = timeSpentMap[peers[1]].Nanoseconds() / numUsers
+	mapMutex.RUnlock()
 	fmt.Println("\n\nAverage time spent:", peers[1], time.Duration(timeSpentNanos))
 	fmt.Println("")
 }
