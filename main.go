@@ -103,7 +103,11 @@ func main() {
 	time.Sleep(2 * time.Second) // Required so Identify protocol is executed
 
 	go logPeriodicInfo(wakuNode)
-	go runEvery(wakuNode, peers, int(cfg.QueriesPerSecond), time.Duration(cfg.NumMinutesQuery))
+	go runEvery(wakuNode,
+				peers,
+				int(cfg.QueriesPerSecond),
+				time.Duration(cfg.NumMinutesQuery),
+				int64(cfg.NumUsers))
 
 	// Wait for a SIGINT or SIGTERM signal
 	ch := make(chan os.Signal, 1)
@@ -133,7 +137,8 @@ func randomHex(n int) (string, error) {
 func runEvery(wakuNode *node.WakuNode,
 			  peers []string,
 			  queriesPerSec int,
-			  numMinutes time.Duration) {
+			  numMinutes time.Duration,
+			  numUsers int64) {
 
 	tickInSeconds := int64(1)
 	ticker := time.NewTicker(time.Duration(tickInSeconds) * time.Second)
@@ -147,7 +152,7 @@ func runEvery(wakuNode *node.WakuNode,
 			// eg 5 msg per second are send very quickly and the remaning time to complete
 			// the second is idle.
 			for i := 0; i < queriesPerSec; i++ {
-				performStoreQueries(wakuNode, peers, numMinutes)
+				performStoreQueries(wakuNode, peers, numMinutes, numUsers)
 				storeReqSent++
 			}
 			end := time.Now().UnixNano() / int64(time.Millisecond)
@@ -246,7 +251,8 @@ func queryNode(ctx context.Context,
 func performStoreQueries(
 	wakuNode *node.WakuNode,
 	peers []string,
-	numMinutes time.Duration) {
+	numMinutes time.Duration,
+	numUsers int64) {
 
 	pubsubTopic := "/waku/2/default-waku/proto"
 	endTime := wakuNode.Timesource().Now()
@@ -261,8 +267,6 @@ func performStoreQueries(
 
 	timeSpentMap := make(map[string]time.Duration)
 	mapMutex := sync.RWMutex{}
-
-	numUsers := int64(10)
 
 	wg := sync.WaitGroup{}
 	for _, addr := range peers {

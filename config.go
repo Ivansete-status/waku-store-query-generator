@@ -18,6 +18,7 @@ type Config struct {
 	LogSentMessages bool
 	PeerStoreSQLiteAddr string
 	PeerStorePostgresAddr string
+	NumUsers    uint64
 }
 
 // By default the release is a custom build. CI takes care of upgrading it with
@@ -34,6 +35,7 @@ func NewCliConfig() (*Config, error) {
 	var peerStoreSQLiteAddr = flag.String("peer-store-sqlite-addr", "", "Multiaddress of peer with Store mounted and using SQLite as archiver")
 	var peerStorePostgresAddr = flag.String("peer-store-postgres-addr", "", "Multiaddress of peer with Store mounted and using Postgres as archiver")
 	var numMinutes = flag.Uint64("num-minutes-query", 5, "Defines the message range (storedAt) in the Store query")
+	var numUsers = flag.Uint64("num-concurrent-users", 1, "Defines the number of concurrent users")
 
 	flag.Parse()
 
@@ -76,6 +78,7 @@ func NewCliConfig() (*Config, error) {
 		LogSentMessages: *logSentMessages,
 		PeerStoreSQLiteAddr: *peerStoreSQLiteAddr,
 		PeerStorePostgresAddr: *peerStorePostgresAddr,
+		NumUsers: *numUsers,
 	}
 	logConfig(conf)
 	return conf, nil
@@ -91,5 +94,6 @@ func logConfig(cfg *Config) {
 		"LogSentMessages": cfg.LogSentMessages,
 		"PeerStoreSQLiteAddr": cfg.PeerStoreSQLiteAddr,
 		"PeerStorePostgresAddr": cfg.PeerStorePostgresAddr,
+		"NumUsers": cfg.NumUsers,
 	}).Info("Cli Config:")
 }
