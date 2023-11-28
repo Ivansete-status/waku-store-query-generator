@@ -8,21 +8,22 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
-	"sync"
 
-	"github.com/google/uuid"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/multiformats/go-multiaddr"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/google/uuid"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
+	"github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
 	"github.com/waku-org/go-waku/waku/v2/node"
 	"github.com/waku-org/go-waku/waku/v2/protocol/store"
-	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var storeReqSent = 0
@@ -93,10 +94,8 @@ func main() {
 
 	log.Info("Connecting to nodes...")
 
-	peers := []string{
-		cfg.PeerStoreSQLiteAddr,
-		cfg.PeerStorePostgresAddr,
-	}
+	peers := append(strings.Split(cfg.PeerStoreSQLiteAddrList, ","),
+		strings.Split(cfg.PeerStorePostgresAddrList, ",")...)
 
 	connectToNodes(ctx, wakuNode, peers)
 
@@ -104,10 +103,12 @@ func main() {
 
 	go logPeriodicInfo(wakuNode)
 	go runEvery(wakuNode,
-				peers,
-				int(cfg.QueriesPerSecond),
-				time.Duration(cfg.NumMinutesQuery),
-				int64(cfg.NumUsers))
+		peers,
+		int(cfg.QueriesPerSecond),
+		time.Duration(cfg.NumMinutesQuery),
+		int64(cfg.NumUsers),
+		cfg.PubSubTopic,
+		cfg.ContentTopic)
 
 	// Wait for a SIGINT or SIGTERM signal
 	ch := make(chan os.Signal, 1)
@@ -135,10 +136,12 @@ func randomHex(n int) (string, error) {
 }
 
 func runEvery(wakuNode *node.WakuNode,
-			  peers []string,
-			  queriesPerSec int,
-			  numMinutes time.Duration,
-			  numUsers int64) {
+	peers []string,
+	queriesPerSec int,
+	numMinutes time.Duration,
+	numUsers int64,
+	pubsubTopic string,
+	contentTopic string) {
 
 	tickInSeconds := int64(1)
 	ticker := time.NewTicker(time.Duration(tickInSeconds) * time.Second)
@@ -152,7 +155,8 @@ func runEvery(wakuNode *node.WakuNode,
 			// eg 5 msg per second are send very quickly and the remaning time to complete
 			// the second is idle.
 			for i := 0; i < queriesPerSec; i++ {
-				performStoreQueries(wakuNode, peers, numMinutes, numUsers)
+				performStoreQueries(wakuNode, peers, numMinutes, numUsers,
+					pubsubTopic, contentTopic)
 				storeReqSent++
 			}
 			end := time.Now().UnixNano() / int64(time.Millisecond)
@@ -171,8 +175,8 @@ func runEvery(wakuNode *node.WakuNode,
 }
 
 func connectToNodes(ctx context.Context,
-					node *node.WakuNode,
-					nodeList []string) {
+	node *node.WakuNode,
+	nodeList []string) {
 	wg := sync.WaitGroup{}
 	for _, addr := range nodeList {
 		wg.Add(1)
@@ -190,12 +194,12 @@ func connectToNodes(ctx context.Context,
 }
 
 func queryNode(ctx context.Context,
-			   node *node.WakuNode,
-			   addr string,
-			   pubsubTopic string,
-			   contentTopic string,
-			   startTime time.Time,
-			   endTime time.Time) (int, error) {
+	node *node.WakuNode,
+	addr string,
+	pubsubTopic string,
+	contentTopic string,
+	startTime time.Time,
+	endTime time.Time) (int, error) {
 
 	p, err := multiaddr.NewMultiaddr(addr)
 	if err != nil {
@@ -213,15 +217,15 @@ func queryNode(ctx context.Context,
 	requestId := uuid.New()
 
 	result, err := node.Store().Query(ctx,
-									  store.Query{
-											Topic:         pubsubTopic,
-											ContentTopics: []string{contentTopic},
-											StartTime:     startTime.UnixNano(),
-											EndTime:       endTime.UnixNano(),
-										},
-										store.WithPeer(info.ID), store.WithPaging(false, 100),
-										store.WithRequestId([]byte(requestId.String())),
-									)
+		store.Query{
+			Topic:         pubsubTopic,
+			ContentTopics: []string{contentTopic},
+			StartTime:     startTime.UnixNano(),
+			EndTime:       endTime.UnixNano(),
+		},
+		store.WithPeer(info.ID), store.WithPaging(false, 100),
+		store.WithRequestId([]byte(requestId.String())),
+	)
 	if err != nil {
 		return -1, err
 	}
@@ -241,7 +245,7 @@ func queryNode(ctx context.Context,
 	}
 
 	log.Info(fmt.Sprintf("%d messages found in %s (Used cursor %d times)\n",
-			 cnt, info.ID, cursorIterations))
+		cnt, info.ID, cursorIterations))
 
 	return cnt, nil
 }
@@ -252,12 +256,12 @@ func performStoreQueries(
 	wakuNode *node.WakuNode,
 	peers []string,
 	numMinutes time.Duration,
-	numUsers int64) {
+	numUsers int64,
+	pubsubTopic string,
+	contentTopic string) {
 
-	pubsubTopic := "/waku/2/default-waku/proto"
 	endTime := wakuNode.Timesource().Now()
 	startTime := endTime.Add(-time.Minute * numMinutes)
-	contentTopic := "my-ctopic"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second) // Test shouldnt take more than 60s
 	defer cancel()
