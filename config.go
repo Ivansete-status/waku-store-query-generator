@@ -61,12 +61,8 @@ func NewCliConfig() (*Config, error) {
 		return nil, errors.New("--bootstrap-node is required")
 	}
 
-	if *peerStoreSQLiteAddrList == "" {
-		return nil, errors.New("--peer-store-sqlite-addr is required")
-	}
-
-	if *peerStorePostgresAddrList == "" {
-		return nil, errors.New("--peer-store-postgres-addr is required")
+	if *peerStoreSQLiteAddrList == "" && *peerStorePostgresAddrList == "" {
+		return nil, errors.New("either --peer-store-sqlite-addr-list or --peer-store-postgres-addr-list is required")
 	}
 
 	conf := &Config{
