@@ -10,7 +10,7 @@ require (
 	github.com/ethereum/go-ethereum v1.10.26
 	github.com/libp2p/go-libp2p v0.28.1
 	github.com/sirupsen/logrus v1.8.1
-	github.com/waku-org/go-waku v0.7.1-0.20230707160405-bc6a305759f2
+	github.com/waku-org/go-waku v0.9.0
 	go.uber.org/zap v1.24.0
 )
 

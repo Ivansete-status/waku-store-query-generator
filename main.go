@@ -24,6 +24,7 @@ import (
 	"github.com/waku-org/go-waku/waku/v2/protocol/store"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"google.golang.org/protobuf/proto"
 )
 
 var storeReqSent = 0
@@ -71,7 +72,6 @@ func main() {
 		node.WithNTP(),
 		node.WithWakuRelay(),
 		node.WithDiscoveryV5(8000, customNodes, true),
-		node.WithDiscoverParams(30),
 		node.WithLogLevel(zapcore.Level(zapcore.ErrorLevel)),
 	)
 	if err != nil {
@@ -218,13 +218,13 @@ func queryNode(ctx context.Context,
 
 	result, err := node.Store().Query(ctx,
 		store.Query{
-			Topic:         pubsubTopic,
+			PubsubTopic:   pubsubTopic,
 			ContentTopics: []string{contentTopic},
-			StartTime:     startTime.UnixNano(),
-			EndTime:       endTime.UnixNano(),
+			StartTime:     proto.Int64(startTime.UnixNano()),
+			EndTime:       proto.Int64(endTime.UnixNano()),
 		},
 		store.WithPeer(info.ID), store.WithPaging(false, 100),
-		store.WithRequestId([]byte(requestId.String())),
+		store.WithRequestID([]byte(requestId.String())),
 	)
 	if err != nil {
 		return -1, err
